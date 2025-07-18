@@ -69,7 +69,10 @@ def gerar_mapa(lista_clientes, veiculo):
 
         folium.Marker(
             origem,
-            popup=f"<div style='font-size:12px;'><strong>Origem:</strong> {linha.Origem}<br><strong>CD:</strong> {linha.CD}</div>",
+            popup=f"""<div style='font-size:12px; width:220px;'>
+                        <strong>Origem:</strong> {linha.Origem}<br>
+                        <strong>CD:</strong> {linha.CD}
+                      </div>""",
             tooltip=f"{linha.CD} - Origem",
             icon=folium.Icon(color='green')
         ).add_to(m)
@@ -91,11 +94,13 @@ def gerar_mapa(lista_clientes, veiculo):
 
             folium.Marker(
                 destino,
-                popup=f"""<div style='font-size:12px;'><strong>Cliente:</strong> {cliente}<br>
-                          <strong>Distância:</strong> {distancia_km:.1f} km<br>
-                          <strong>Tempo:</strong> {tempo_min:.0f} min<br>
-                          <strong>Consumo:</strong> {litros:.2f} L<br>
-                          <strong>Custo:</strong> R$ {custo:.2f}</div>""",
+                popup=f"""<div style='font-size:12px; width:220px;'>
+                            <strong>Cliente:</strong> {cliente}<br>
+                            <strong>Distância:</strong> {distancia_km:.1f} km<br>
+                            <strong>Tempo:</strong> {tempo_min:.0f} min<br>
+                            <strong>Consumo:</strong> {litros:.2f} L<br>
+                            <strong>Custo:</strong> R$ {custo:.2f}
+                          </div>""",
                 tooltip=f"{cliente} - Destino",
                 icon=folium.Icon(color='red')
             ).add_to(m)
@@ -103,13 +108,19 @@ def gerar_mapa(lista_clientes, veiculo):
         else:
             folium.Marker(
                 destino,
-                popup=f"❗ Falha OSRM para {cliente}",
+                popup=f"""<div style='font-size:12px;width:200px;'>
+                            ❗ Falha OSRM para {cliente}
+                          </div>""",
                 icon=folium.Icon(color='gray')
             ).add_to(m)
 
     folium.Marker(
         [centro_lat, centro_lon],
-        popup=f"<div style='font-size:12px; width:200px;'><strong>Custo Total:</strong> R$ {total_custo:.2f}<br><strong>Tempo Total:</strong> {total_tempo:.0f} min<br><strong>Litros:</strong> {total_litros:.2f} L</div>",
+        popup=f"""<div style='font-size:12px; width:220px;'>
+                    <strong>Custo Total:</strong> R$ {total_custo:.2f}<br>
+                    <strong>Tempo Total:</strong> {total_tempo:.0f} min<br>
+                    <strong>Litros:</strong> {total_litros:.2f} L
+                  </div>""",
         icon=folium.Icon(color='darkpurple', icon='usd', prefix='fa')
     ).add_to(m)
 
