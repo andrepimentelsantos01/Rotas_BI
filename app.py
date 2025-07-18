@@ -35,7 +35,8 @@ else:
     clientes_selecionados = df_filtrado_cd[df_filtrado_cd['Agrupamento'] == grupo_selecionado]['Cliente'].dropna().tolist()
     st.info(f"Clientes do grupo **{grupo_selecionado}** selecionados automaticamente.")
 
-veiculos = df_filtrado_cd['Veículo'].dropna().unique().tolist()
+# Veículos SEM filtragem por CD
+veiculos = df_custo['Veículo'].dropna().unique().tolist()
 veiculo_selecionado = st.selectbox("Selecione o Veículo:", veiculos)
 
 tipo_rota = st.selectbox("Tipo de Roteirização:", ['/route', '/trip'])
@@ -50,19 +51,29 @@ def requisitar_rota(origem_lat, origem_lon, destino_lat, destino_lon):
 
 def gerar_mapa(lista_clientes, veiculo, tipo_rota):
     df_filtrado = df_filtrado_cd[df_filtrado_cd['Cliente'].isin(lista_clientes)]
-    linha_veiculo = df_filtrado_cd[df_filtrado_cd['Veículo'] == veiculo].iloc[0]
-    consumo_kml, preco_combustivel = linha_veiculo['Consumo KM/L'], linha_veiculo['Custo Combustível']
 
-    centro_lat = pd.concat([df_filtrado['Origem_Lat'], df_filtrado['Destino_Lat']]).mean()
-    centro_lon = pd.concat([df_filtrado['Origem_Lon'], df_filtrado['Destino_Lon']]).mean()
+    # Consumo e custos sempre do df_custo
+    linha_veiculo = df_custo[df_custo['Veículo'] == veiculo]
+    if linha_veiculo.empty:
+        st.error(f"⚠️ O veículo '{veiculo}' não foi encontrado na planilha. Verifique a base de dados.")
+        st.stop()
 
-    m = folium.Map(location=[centro_lat, centro_lon], zoom_start=8, tiles='OpenStreetMap')
-
-    total_custo = total_tempo = total_litros = total_distancia = 0
+    linha_veiculo = linha_veiculo.iloc[0]
+    consumo_kml = linha_veiculo['Consumo KM/L']
+    preco_combustivel = linha_veiculo['Custo Combustível']
+    capacidade_carga_m3 = linha_veiculo['Capacidade de Carga m3']
 
     origem_lat = df_filtrado.iloc[0]['Origem_Lat']
     origem_lon = df_filtrado.iloc[0]['Origem_Lon']
     origem_coord = (origem_lat, origem_lon)
+
+    # Centro do mapa sempre na origem
+    centro_lat = origem_lat
+    centro_lon = origem_lon
+
+    m = folium.Map(location=[centro_lat, centro_lon], zoom_start=8, tiles='OpenStreetMap')
+
+    total_custo = total_tempo = total_litros = total_distancia = 0
 
     folium.Marker(
         [origem_lat, origem_lon],
@@ -114,7 +125,6 @@ def gerar_mapa(lista_clientes, veiculo, tipo_rota):
                     tooltip=f"{cliente} - Destino",
                     icon=folium.Icon(color='red')
                 ).add_to(m)
-
             else:
                 folium.Marker(
                     [destino[0], destino[1]],
@@ -122,7 +132,7 @@ def gerar_mapa(lista_clientes, veiculo, tipo_rota):
                     icon=folium.Icon(color='gray')
                 ).add_to(m)
 
-    else:  # /trip sequencial
+    else:
         origem_lat_atual, origem_lon_atual = origem_lat, origem_lon
         for idx, linha in enumerate(df_filtrado.itertuples()):
             destino_lat = linha.Destino_Lat
@@ -162,7 +172,18 @@ def gerar_mapa(lista_clientes, veiculo, tipo_rota):
         icon=folium.Icon(color='darkpurple', icon='usd', prefix='fa')
     ).add_to(m)
 
-    st.markdown(f"### 📊 Resultados Gerais:\n- Rotas selecionadas: {len(df_filtrado)}\n- Distância Total: {total_distancia:.2f} km\n- Custo Total: R$ {total_custo:.2f}\n- Tempo Total: {total_tempo:.0f} min\n- Consumo Total: {total_litros:.2f} L")
+    # ✅ Exibição completa no painel
+    st.markdown(f"""
+### 📊 Resultados Gerais:
+- Veículo: **{veiculo}**
+- Capacidade de Carga: **{capacidade_carga_m3:.1f} m³**
+- Consumo: **{consumo_kml:.2f} km/l**
+- Rotas selecionadas: {len(df_filtrado)}
+- Distância Total: {total_distancia:.2f} km
+- Custo Total: R$ {total_custo:.2f}
+- Tempo Total: {total_tempo:.0f} min
+- Consumo Total: {total_litros:.2f} L
+""")
 
     if tipo_rota == '/trip':
         st.markdown("### 📋 Ordem das Entregas (Mais Próximo → Mais Distante):")
