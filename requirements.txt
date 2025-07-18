@@ -4,3 +4,4 @@ openpyxl
 folium
 requests
 streamlit-folium
+geopy
