@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import folium
 import requests
+import time
 from concurrent.futures import ThreadPoolExecutor
 from streamlit_folium import st_folium
 from geopy.distance import geodesic
@@ -74,16 +75,49 @@ veiculo_selecionado = st.selectbox("Selecione o Veículo:", veiculos)
 tipo_rota = st.selectbox("Tipo de Roteirização:", ['/route', '/trip'])
 
 # --------------------------
-# OSRM
+# OSRM: sessão + retry/backoff
 # --------------------------
-def requisitar_rota(origem_lat, origem_lon, destino_lat, destino_lon):
-    # OSRM espera lon,lat
-    url = f"http://router.project-osrm.org/route/v1/driving/{origem_lon},{origem_lat};{destino_lon},{destino_lat}?overview=full&geometries=geojson"
-    try:
-        resp = requests.get(url, timeout=15)
-        return resp.json() if resp.status_code == 200 else None
-    except Exception:
+SESSION = requests.Session()
+SESSION.headers.update({"User-Agent": "Curitiba-Rotas/1.0 (+streamlit)"})
+OSRM_BASE = "https://router.project-osrm.org"  # usar https
+
+def _coords_valid(lat, lon):
+    return (-90 <= lat <= 90) and (-180 <= lon <= 180)
+
+def requisitar_rota(origem_lat, origem_lon, destino_lat, destino_lon,
+                    retries=3, pause_s=0.8, timeout_s=30):
+    """
+    Chama OSRM com retry/backoff. Retorna dict do OSRM quando code=='Ok'; caso contrário, None.
+    """
+    if not (_coords_valid(origem_lat, origem_lon) and _coords_valid(destino_lat, destino_lon)):
         return None
+
+    # OSRM espera lon,lat
+    url = f"{OSRM_BASE}/route/v1/driving/{origem_lon},{origem_lat};{destino_lon},{destino_lat}?overview=full&geometries=geojson"
+
+    last_err = None
+    for attempt in range(1, retries + 1):
+        try:
+            resp = SESSION.get(url, timeout=timeout_s)
+            if resp.status_code == 200:
+                data = resp.json()
+                if data.get("code") == "Ok" and data.get("routes"):
+                    return data
+                # NoRoute, NoSegment, etc. Guarde motivo para exibir
+                last_err = f"OSRM code={data.get('code')}"
+            elif resp.status_code in (429, 502, 503, 504):
+                last_err = f"HTTP {resp.status_code}"
+            else:
+                last_err = f"HTTP {resp.status_code}"
+        except requests.exceptions.RequestException as e:
+            last_err = f"exc: {e}"
+
+        # espera antes de tentar de novo
+        if attempt < retries:
+            time.sleep(pause_s * attempt)  # backoff linear simples
+
+    # Se chegou aqui, falhou
+    return {"error": last_err or "falha desconhecida"}
 
 # --------------------------
 # Mapa
@@ -113,7 +147,7 @@ def gerar_mapa(cd, lista_clientes, veiculo, tipo_rota):
     centro_lat, centro_lon = origem_lat, origem_lon
     m = folium.Map(location=[centro_lat, centro_lon], zoom_start=10, tiles='OpenStreetMap')
 
-    # ---------- AJUSTE 1: ORIGEM VERDE + CD/ENDEREÇO ----------
+    # ORIGEM VERDE
     folium.Marker(
         [origem_lat, origem_lon],
         popup=(
@@ -129,15 +163,15 @@ def gerar_mapa(cd, lista_clientes, veiculo, tipo_rota):
     total_custo = total_tempo = total_litros = total_distancia = 0.0
     cores = ['purple', 'blue', 'orange', 'green', 'darkred', 'cadetblue']
 
-    # ---------- AJUSTE 2: AUTO-ZOOM (bounds) ----------
     bounds = [[origem_lat, origem_lon]]
 
     if tipo_rota == '/route':
-        # Paraleliza: sempre origem = CD selecionado
+        # Paraleliza com limitação de taxa
         def _call(row):
+            time.sleep(0.35)  # throttle ~3 req/s por segurança
             return requisitar_rota(origem_lat, origem_lon, float(row.Destino_Lat), float(row.Destino_Lon))
 
-        with ThreadPoolExecutor(max_workers=10) as ex:
+        with ThreadPoolExecutor(max_workers=3) as ex:  # reduzir paralelismo
             rotas = list(ex.map(_call, df_dest.itertuples(index=False)))
 
         for idx, (row, rota) in enumerate(zip(df_dest.itertuples(index=False), rotas)):
@@ -145,7 +179,8 @@ def gerar_mapa(cd, lista_clientes, veiculo, tipo_rota):
             dest_lat = float(row.Destino_Lat)
             dest_lon = float(row.Destino_Lon)
 
-            if rota and rota.get('routes'):
+            ok = isinstance(rota, dict) and rota.get('routes') and rota.get('code') == 'Ok'
+            if ok:
                 rota_data = rota['routes'][0]
                 coords = [[lat, lon] for lon, lat in rota_data['geometry']['coordinates']]
                 distancia_km = rota_data['distance'] / 1000
@@ -177,13 +212,13 @@ def gerar_mapa(cd, lista_clientes, veiculo, tipo_rota):
                     icon=folium.Icon(color='red')
                 ).add_to(m)
             else:
+                motivo = rota.get('error') if isinstance(rota, dict) and 'error' in rota else 'Falha'
                 folium.Marker(
                     [dest_lat, dest_lon],
-                    popup=f"<div style='font-size:12px;width:220px;'>❗ Falha OSRM para {cliente}</div>",
+                    popup=f"<div style='font-size:12px;width:260px;'>❗ Falha OSRM para {cliente}<br><small>{motivo}</small></div>",
                     icon=folium.Icon(color='gray')
                 ).add_to(m)
 
-            # adiciona destino aos bounds
             bounds.append([dest_lat, dest_lon])
 
     else:
@@ -201,7 +236,8 @@ def gerar_mapa(cd, lista_clientes, veiculo, tipo_rota):
             dest_lon = float(row.Destino_Lon)
 
             rota = requisitar_rota(o_lat, o_lon, dest_lat, dest_lon)
-            if rota and rota.get('routes'):
+            ok = isinstance(rota, dict) and rota.get('routes') and rota.get('code') == 'Ok'
+            if ok:
                 rota_data = rota['routes'][0]
                 coords = [[lat, lon] for lon, lat in rota_data['geometry']['coordinates']]
                 distancia_km = rota_data['distance'] / 1000
@@ -236,13 +272,13 @@ def gerar_mapa(cd, lista_clientes, veiculo, tipo_rota):
                 # próxima perna parte deste destino
                 o_lat, o_lon = dest_lat, dest_lon
             else:
+                motivo = rota.get('error') if isinstance(rota, dict) and 'error' in rota else 'Falha'
                 folium.Marker(
                     [dest_lat, dest_lon],
-                    popup=f"<div style='font-size:12px;width:220px;'>❗ Falha OSRM para {cliente}</div>",
+                    popup=f"<div style='font-size:12px;width:260px;'>❗ Falha OSRM para {cliente}<br><small>{motivo}</small></div>",
                     icon=folium.Icon(color='gray')
                 ).add_to(m)
 
-            # adiciona destino aos bounds
             bounds.append([dest_lat, dest_lon])
 
         # Lista de ordem (mais perto -> mais longe)
@@ -250,7 +286,7 @@ def gerar_mapa(cd, lista_clientes, veiculo, tipo_rota):
         for idx, row in enumerate(df_dest.itertuples(index=False), 1):
             st.markdown(f"{idx}. {row.Cliente} - {row.Distancia_CD_km:.1f} km")
 
-    # marcador de resumo (mantido)
+    # marcador de resumo
     folium.Marker(
         [origem_lat, origem_lon],
         popup=(
@@ -263,11 +299,11 @@ def gerar_mapa(cd, lista_clientes, veiculo, tipo_rota):
         icon=folium.Icon(color='darkpurple', icon='usd', prefix='fa')
     ).add_to(m)
 
-    # ---------- AJUSTE 2 (final): aplica o fit_bounds ----------
+    # fit_bounds
     if len(bounds) > 1:
         m.fit_bounds(bounds)
 
-    # Painel resumo (mantido)
+    # Painel resumo
     st.markdown(f"""
 ### 📊 Resultados Gerais:
 - CD (Origem): **{cd}**
